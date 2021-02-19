@@ -1,0 +1,38 @@
+{
+    "pluginAlias": "Viessmann-control",
+    "pluginType": "platform",
+    "singular": true,
+    "headerDisplay": "Homebridge Plugin to control Viessmann heating systms via vcontrold",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string",
+          "required": true,
+          "default": "Viessmann"
+        },
+        "vcontroldIP": {
+            "title": "IP of vcontrold",
+            "type": "string",
+            "required": true,
+            "placeholder": "127.0.0.1",
+            "format": "hostname"
+          },
+          "vcontroldPort": {
+            "title": "Port of vcontrold",
+            "type": "integer",
+            "required": true,
+            "default": 1234
+          },
+          "manufacturer": {
+            "title": "Manufacturer",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model Code",
+            "type": "string"
+          }
+      }
+    }
+  }
