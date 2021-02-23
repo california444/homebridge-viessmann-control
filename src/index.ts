@@ -294,14 +294,14 @@ class ViessmannHandler{
         if(this.hk == Heizkreis.HK1) mappedValue = 1;
         else if(this.hk == Heizkreis.HK2) mappedValue = 0;
       }
-      let item: vcontrolQueueItem = {action:vcontrolAction.GET, value: mappedValue, cmd: cmd, cb: () => {
+      let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: mappedValue, cmd: cmd, cb: () => {
         callback(null);
         }
       };
       vcontrolQueue.push(item);
       myEmitter.emit(VCONTROL_EVENT_NAME);
   
-      callback(null);
+      //callback(null);
     }
   
     handleCurrentTemperatureGet(callback: any) {
