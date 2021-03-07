@@ -8,6 +8,8 @@
       "ES2017",
       "ES2018"
     ],
+    "declaration": true,
+    "declarationMap": true,
     "sourceMap": true,
     "rootDir": "src",
     "outDir": "dist",
@@ -18,5 +20,8 @@
   },
   "include": [
     "./src/**/*"
+  ],
+  "exclude": [
+    "**/*.spec.ts"
   ]
 }

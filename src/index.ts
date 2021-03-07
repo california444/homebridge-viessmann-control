@@ -1,10 +1,8 @@
+import { RSA_PKCS1_OAEP_PADDING } from "constants";
 import {
   API,
   APIEvent,
-  Characteristic,
-  CharacteristicEventTypes,
   CharacteristicProps,
-  CharacteristicSetCallback,
   CharacteristicValue,
   DynamicPlatformPlugin,
   HAP,
@@ -23,28 +21,6 @@ const PLATFORM_NAME = "Viessmann-control"; // same as in config.json
 
 const VCONTROL_EVENT_NAME = "event";
 
-/*
- * IMPORTANT NOTICE
- *
- * One thing you need to take care of is, that you never ever ever import anything directly from the "homebridge" module (or the "hap-nodejs" module).
- * The above import block may seem like, that we do exactly that, but actually those imports are only used for types and interfaces
- * and will disappear once the code is compiled to Javascript.
- * In fact you can check that by running `npm run build` and opening the compiled Javascript file in the `dist` folder.
- * You will notice that the file does not contain a `... = require("homebridge");` statement anywhere in the code.
- *
- * The contents of the above import statement MUST ONLY be used for type annotation or accessing things like CONST ENUMS,
- * which is a special case as they get replaced by the actual value and do not remain as a reference in the compiled code.
- * Meaning normal enums are bad, const enums can be used.
- *
- * You MUST NOT import anything else which remains as a reference in the code, as this will result in
- * a `... = require("homebridge");` to be compiled into the final Javascript code.
- * This typically leads to unexpected behavior at runtime, as in many cases it won't be able to find the module
- * or will import another instance of homebridge causing collisions.
- *
- * To mitigate this the {@link API | Homebridge API} exposes the whole suite of HAP-NodeJS inside the `hap` property
- * of the api object, which can be acquired for example in the initializer function. This reference can be stored
- * like this for example and used to access all exported variables and classes from HAP-NodeJS.
- */
 let hap: HAP;
 let Accessory: typeof PlatformAccessory;
 class MyEmitter extends EventEmitter {}
@@ -108,55 +84,53 @@ class ViessmanControl implements DynamicPlatformPlugin {
   }
 
   async processvControl() {
-    if(this.vControld_Running) return;
+    if(this.vControld_Running) {
+      this.log.debug("vcontrol already running. returning");
+      return;
+    }
+    this.log.debug("vcontrol running true");
     this.vControld_Running = true;
 
-    this.log.debug("Queue size: "+vcontrolQueue.length);
     let vcontrolQueueItem = vcontrolQueue.shift();
-    this.log.debug("Queue size: "+vcontrolQueue.length);
     if(vcontrolQueueItem) {
       try {
         await this.vControlC.connect();
       } catch(err) {
         this.log.error(err);
+        vcontrolQueueItem.cb(null);
+        this.log.debug("vcontrol running false");
+        this.vControld_Running = false;
         return;
       }
     }
 
     while(vcontrolQueueItem) {
 
-      this.log.debug(vcontrolQueueItem.cmd);
+      this.log.debug("Executing cmd: "+ vcontrolQueueItem.cmd);
       try {
         if(vcontrolQueueItem.action == vcontrolAction.GET) {
 
           let data = await this.vControlC.getData(vcontrolQueueItem.cmd);
           this.log.debug("received data for cmd: "+vcontrolQueueItem.cmd+": "+data);
   
-          this.log.debug("callback");
           vcontrolQueueItem.cb(data);
         }
         else {
-          await this.vControlC.connect();
-  
           await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value);
           vcontrolQueueItem.cb();
-  
         }
-
       } catch(err) {
         this.log.error(err);
         vcontrolQueueItem.cb(null);
-
       }
       vcontrolQueueItem = vcontrolQueue.shift();
-      this.log.debug("Queue size: "+vcontrolQueue.length);
-
     }
     try {
       await this.vControlC.close();
     } catch(err) {
       this.log.error(err);
     }
+    this.log.debug("vcontrol running false");
 
     this.vControld_Running = false;
   }
@@ -177,93 +151,55 @@ class ViessmanControl implements DynamicPlatformPlugin {
       accInfo.setCharacteristic(hap.Characteristic.Model, this.config.model || 'unknown');
       accInfo.setCharacteristic(hap.Characteristic.SoftwareRevision, version);
     }
-    //for(let entry in this.heatingCircles) {
-     this.heatingCircleNames.forEach((entry:Heizkreis) => { 
-       let handler = new ViessmannHandler(entry, this.log);
-       
-       this.log.info("Configure service for: ", entry);
+     this.heatingCircleNames.forEach((entry:Heizkreis) => {
+
+      let handler = new ViessmannHandler(entry, this.log);
+      this.log.info("Configure service for: ", entry);
       
       let service_old = accessory.getServiceById(hap.Service.Thermostat, entry);
       if(service_old) accessory.removeService(service_old);
       if(service_old) this.log.debug("found service ==> remove:", service_old?.UUID);
 
-      let service = new hap.Service.Thermostat(entry, entry);
-      
+      let service = new hap.Service.Thermostat(entry, entry);   
       this.log.debug("add new thermostst service with UUID", service.UUID);
-      // || accessory.addService(hap.Service.Thermostat, entry, entry);
-      //if(service == undefined) ;
-
-        /*if(service) this.log.debug("found service ==> remove:", service?.UUID)
-        if(service) accessory.removeService(service);
-        
-        service = new hap.Service.Thermostat(entry, entry);
-        this.log.debug("add new thermostst service with UUID", service.UUID);
-        */
-
-        // create handlers for required characteristics
+ 
         service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState)
-         .on(CharacteristicEventTypes.GET, (callback: CharacteristicSetCallback) => {
-           //callback();
-          //handler.handleCurrentHeatingCoolingStateGet(callback);
-          callback();
-          handler.handleCurrentHeatingCoolingStateGet(service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState));
-          
-         });
+        .onGet(handler.handleCurrentHeatingCoolingStateGet.bind(handler));
 
         service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState)
-          .on(CharacteristicEventTypes.GET, (callback: CharacteristicSetCallback) => {
-            callback();
-            handler.handleTargetHeatingCoolingStateGet(service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState))
+        .onGet(handler.handleTargetHeatingCoolingStateGet.bind(handler))
+        /*.onSet(async (value: CharacteristicValue) => {
+          handler.handleTargetHeatingCoolingStateSet(value);
           })
-          .on(CharacteristicEventTypes.SET, (state: CharacteristicValue, callback: CharacteristicSetCallback) => {
-            callback();
-            //handler.handleTargetHeatingCoolingStateSet(state, callback);
-            handler.handleTargetHeatingCoolingStateSet(state, service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState));
-            
-          })
-          .props.validValues = [0, 1]; //only OFF and HEAT are supported
+          */
+        .onSet(handler.handleTargetHeatingCoolingStateSet.bind(handler))
+        .props.validValues = [0, 1]; //only OFF and HEAT are supported
 
         service.getCharacteristic(hap.Characteristic.CurrentTemperature)
-          .on(CharacteristicEventTypes.GET, (callback: CharacteristicSetCallback) => {
-            //handler.handleCurrentTemperatureGet(callback);
-            callback();
-            handler.handleCurrentTemperatureGet(service.getCharacteristic(hap.Characteristic.CurrentTemperature));
-            });
+        .onGet(handler.handleCurrentTemperatureGet.bind(handler));
 
         service.getCharacteristic(hap.Characteristic.TargetTemperature)
-          .on(CharacteristicEventTypes.GET, (callback: CharacteristicSetCallback) => {
-            callback()
-            //handler.handleTargetTemperatureGet(callback)
-            handler.handleTargetTemperatureGet(service.getCharacteristic(hap.Characteristic.TargetTemperature));
-          })
-          .on(CharacteristicEventTypes.SET, (state: CharacteristicValue, callback: CharacteristicSetCallback) => {
-            callback();
-            //handler.handleTargetTemperatureSet(state, callback);
-            handler.handleTargetTemperatureSet(state, service.getCharacteristic(hap.Characteristic.TargetTemperature));
-          });
-          let props:CharacteristicProps = service.getCharacteristic(hap.Characteristic.TargetTemperature).props;
+        .onGet(handler.handleTargetTemperatureGet.bind(handler))
+        .onSet(handler.handleTargetTemperatureSet.bind(handler))
+        /*
+        .onSet(async (value: CharacteristicValue) => {
+          handler.handleTargetTemperatureSet(value);
+          }) */
+
+         let props:CharacteristicProps = service.getCharacteristic(hap.Characteristic.TargetTemperature).props;
           props.minValue = 15;
           props.maxValue = 25;
           props.minStep = 1;
-
+          
         service.getCharacteristic(hap.Characteristic.TemperatureDisplayUnits)
-          .on(CharacteristicEventTypes.GET, (callback: CharacteristicSetCallback) => {
-            callback();
-            //handler.handleTemperatureDisplayUnitsGet(callback);
-            handler.handleTemperatureDisplayUnitsGet(service.getCharacteristic(hap.Characteristic.TemperatureDisplayUnits));
-          })
-          .on(CharacteristicEventTypes.SET, (state: CharacteristicValue, callback: CharacteristicSetCallback) => {
-            callback();
-            //handler.handleTemperatureDisplayUnitsSet(state, callback);
-            handler.handleTemperatureDisplayUnitsSet(state, service.getCharacteristic(hap.Characteristic.TemperatureDisplayUnits));
-          })
-          .props.validValues = [0];
+        .onGet(handler.handleTemperatureDisplayUnitsGet.bind(handler))
+        .onSet(handler.handleTemperatureDisplayUnitsSet.bind(handler))
+        .props.validValues = [0];
 
         accessory.addService(service);
     });
     this.accessories.push(accessory);
   }
-
 
   didFinishLaunching(): void {
     this.log.info("didFinishLaunching");
@@ -289,105 +225,112 @@ class ViessmannHandler{
     this.log = log;
   }
 
-  //handleCurrentHeatingCoolingStateGet(callback: any) {
-    handleCurrentHeatingCoolingStateGet(characteristic: Characteristic) {
+  handleCurrentHeatingCoolingStateGet() : Promise<CharacteristicValue> {
     this.log.debug('Triggered GET CurrentHeatingCoolingState');
+
     this.log.debug("name HK: "+this.hk);
     let cmd = this.hk == Heizkreis.HK1 ? "getVitoBetriebsartM1" :"getVitoBetriebsartM2";
 
-    let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
-      this.log.debug("CurrentHeatingCoolingState:"+val);
-      let currentValue = (val >= 2) ? 1:0;
-      characteristic.updateValue(currentValue);
-      //callback(null, currentValue);
+    var p1 = new Promise<number>(
+      function(resolve, reject) {
+
+        let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
+          let currentValue = (val >= 2) ? 1:0;
+          resolve(currentValue);
+          }
+        }
+        vcontrolQueue.push(item);
+        myEmitter.emit(VCONTROL_EVENT_NAME);
+      });
+    return p1;
+  }
+
+
+  handleTargetHeatingCoolingStateGet() : Promise<CharacteristicValue>{  
+    let targetState = this.targetState;
+    this.log.debug('Triggered GET TargetHeatingCoolingState');
+    this.log.debug("%d", this.targetState);
+
+    var p1 = new Promise<number>(
+      function(resolve, reject) {
+        resolve(targetState);
+      });
+    return p1;
+  }
+
+  async handleTargetHeatingCoolingStateSet(value: CharacteristicValue) {
+    this.log.debug('Triggered SET TargetHeatingCoolingState:', value);
+    let cmd = this.hk == Heizkreis.HK1 ? "setVitoBetriebsartM1" :"setVitoBetriebsartM2";
+    this.targetState = value as number;
+    let mappedValue = 2;
+
+    if(value == 1) mappedValue = 2;
+    else if (value == 0) {
+      if(this.hk == Heizkreis.HK1) mappedValue = 1;
+      else if(this.hk == Heizkreis.HK2) mappedValue = 0;
+    }
+    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: mappedValue, cmd: cmd, cb: () => {
+      this.log.info("Set TargetHeatingCoolingState done.");
       }
     };
     vcontrolQueue.push(item);
     myEmitter.emit(VCONTROL_EVENT_NAME);
   }
-  
-    //handleTargetHeatingCoolingStateGet(callback : any) {
-      handleTargetHeatingCoolingStateGet(characteristic: Characteristic) {
-      this.log.debug('Triggered GET TargetHeatingCoolingState');
-      this.log.debug("%d", this.targetState);
-      characteristic.updateValue(this.targetState);
-      //callback(null, this.targetState);
-    }
 
-    //async handleTargetHeatingCoolingStateSet(value: any, callback: any) {
-      async handleTargetHeatingCoolingStateSet(value: any, characteristic: Characteristic) {
-      this.log.debug('Triggered SET TargetHeatingCoolingState:', value);
-      let cmd = this.hk == Heizkreis.HK1 ? "setVitoBetriebsartM1" :"setVitoBetriebsartM2";
-      this.targetState = value;
-      let mappedValue = 2;
+  handleCurrentTemperatureGet() : Promise<CharacteristicValue> {
+    this.log.debug('Triggered GET CurrentTemperature');
+    const currentValue = 21;
 
-      if(value == 1) mappedValue = 2;
-      else if (value == 0) {
-        if(this.hk == Heizkreis.HK1) mappedValue = 1;
-        else if(this.hk == Heizkreis.HK2) mappedValue = 0;
-      }
-      let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: mappedValue, cmd: cmd, cb: () => {
-        //callback(null);
-        characteristic.updateValue(this.targetState);
+    var p1 = new Promise<number>(
+      function(resolve, reject) {
+        resolve(currentValue);
+      });
+    return p1;
+  }
+
+  handleTargetTemperatureGet() :Promise<CharacteristicValue> {
+      let log = this.log;
+      let hk = this.hk;
+
+      var p1 = new Promise<number>(
+      function(resolve, reject) {
+        let cmd = hk == Heizkreis.HK1 ? "getTempRaumNorSollM1" :"getTempRaumNorSollM2";
+        let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
+          log.debug(hk+ ": received TargetTemperature: "+val);
+          let currentValue = val as number;
+          resolve(currentValue);
+          }
         }
-      };
-      vcontrolQueue.push(item);
-      myEmitter.emit(VCONTROL_EVENT_NAME);
-  
-      //callback(null);
-    }
-  
-    //handleCurrentTemperatureGet(callback: any) {
-      handleCurrentTemperatureGet(characteristic: Characteristic) {
-      this.log.debug('Triggered GET CurrentTemperature');
-      const currentValue = 21;
-      characteristic.updateValue(currentValue);
-      //callback(null, currentValue);
-    }
-  
-    //async handleTargetTemperatureGet(callback: any) {
-      async handleTargetTemperatureGet(characteristic: Characteristic) {
-      this.log.debug('Triggered GET TargetTemperature');
-      let cmd = this.hk == Heizkreis.HK1 ? "getTempRaumNorSollM1" :"getTempRaumNorSollM2";
-      let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
-        this.log.info("received TargetTemperature: "+val);
-        let currentValue = val as number;
-        //callback(null, currentValue);
-        characteristic.updateValue(currentValue);
-        }
-      };
-      vcontrolQueue.push(item);
-      myEmitter.emit(VCONTROL_EVENT_NAME);
-    }
+        vcontrolQueue.push(item);
+        myEmitter.emit(VCONTROL_EVENT_NAME);
+      });
+      return p1;
+  }
 
-    //handleTargetTemperatureSet(value: any, callback: any) {
-      handleTargetTemperatureSet(value: any, characteristic: Characteristic) {
-      this.log.debug('Triggered SET TargetTemperature:', value);
-      let cmd = this.hk == Heizkreis.HK1 ? "setTempRaumNorSollM1" :"setTempRaumNorSollM2";
-  
-      let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: value, cmd: cmd, cb: () => {
-        this.log.info("set TargetTemperature success: " +value);
-        //callback(null);
-        characteristic.updateValue(value);
+  handleTargetTemperatureSet(value: CharacteristicValue) {
+    this.log.debug('Triggered SET TargetTemperature: %d', value as number);
+    let cmd = this.hk == Heizkreis.HK1 ? "setTempRaumNorSollM1" :"setTempRaumNorSollM2";
+
+    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: value as number, cmd: cmd, cb: () => {
+        this.log.info("Set TargetTemperature done.");
       }
     };
     vcontrolQueue.push(item);
     myEmitter.emit(VCONTROL_EVENT_NAME);
-    }
+  }
 
-    //handleTemperatureDisplayUnitsGet(callback: any) {
-      handleTemperatureDisplayUnitsGet(characteristic: Characteristic) {
-      this.log.debug('Triggered GET TemperatureDisplayUnits');
-      const currentValue = 0;
-  
-      characteristic.updateValue(currentValue);
-      //callback(null, currentValue);
-    }
+  handleTemperatureDisplayUnitsGet(): Promise<number> {
+    this.log.debug('Triggered GET TemperatureDisplayUnits');
+    const currentValue = 0;
 
-    handleTemperatureDisplayUnitsSet(value: any, characteristic: Characteristic) {
-      this.log.debug('Triggered SET TemperatureDisplayUnits:', value);
-      characteristic.updateValue(0);
-  
-      //callback(null);
-    }
+    var p1 = new Promise<number>(
+      function(resolve, reject) {
+        resolve(0);
+      });
+    return p1;
+  }
+
+  handleTemperatureDisplayUnitsSet(value: CharacteristicValue) {
+    this.log.debug('Triggered SET TemperatureDisplayUnits: ' + value);
+  } 
 }

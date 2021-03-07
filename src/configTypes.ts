@@ -9,12 +9,10 @@ export type ViessmannConfig = {
 
   };
 
-
   export enum vcontrolAction  {
     GET,
     SET
   }
-
 
   export enum Heizkreis {
     HK1 ="HK1",
@@ -30,21 +28,5 @@ export type ViessmannConfig = {
 
   export type heatingCircle = {
     name: string;
-    //class: ViessmannHandler;
     log:Logging;
-
   }
-    /*
-  export class ViessmannHandler {
-
-    handleCurrentHeatingCoolingStateGet: any;
-    handleTargetHeatingCoolingStateGet: any;
-    handleTargetHeatingCoolingStateSet: (value:any, callback:any) => void;
-    handleCurrentTemperatureGet: any;
-    handleTargetTemperatureGet: any;
-    handleTargetTemperatureSet: any;
-    handleTemperatureDisplayUnitsGet: any;
-    handleTemperatureDisplayUnitsSet: any;
-  
-  };  */
-  
