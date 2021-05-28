@@ -1,4 +1,3 @@
-import { RSA_PKCS1_OAEP_PADDING } from "constants";
 import {
   API,
   APIEvent,
@@ -11,7 +10,8 @@ import {
   PlatformAccessoryEvent,
   PlatformConfig,
 } from "homebridge";
-import {ViessmannConfig, vcontrolAction, vcontrolQueueItem, Heizkreis} from './configTypes';
+import {ViessmannConfig, vcontrolAction, vcontrolQueueItem, Heizkreis, cache} from './configTypes';
+
 const EventEmitter = require('events');
 const VControl = require("vcontrol")
 const version = require('../package.json').version; 
@@ -20,6 +20,8 @@ const PLUGIN_NAME = "homebridge-viessmann-control"; // same as in package json
 const PLATFORM_NAME = "Viessmann-control"; // same as in config.json
 
 const VCONTROL_EVENT_NAME = "event";
+
+const updateIntervalMinutes = 30;
 
 let hap: HAP;
 let Accessory: typeof PlatformAccessory;
@@ -31,7 +33,6 @@ let vcontrolQueue :vcontrolQueueItem []= [];
 export = (api: API) => {
   hap = api.hap;
   Accessory = api.platformAccessory;
-
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, ViessmanControl);
 };
 
@@ -45,8 +46,12 @@ class ViessmanControl implements DynamicPlatformPlugin {
 
   private readonly vcontroldIP: string;
   private readonly vcontroldPort: number;
+  private readonly debug: boolean;
 
   private vControlC:any;
+
+  private timer: NodeJS.Timeout;
+  private handlerList:ViessmannHandler[] = [];
 
   private vControld_Running:boolean = false;
   
@@ -60,12 +65,14 @@ class ViessmanControl implements DynamicPlatformPlugin {
 
     this.vcontroldIP = this.config.vcontroldIP || '127.0.0.1';
     this.vcontroldPort = this.config.vcontroldPort || 3002;
+    this.debug = this.config.debug  || false;
 
     this.vControlC = new VControl({
       host: this.vcontroldIP,
       port: this.vcontroldPort,
-      debug: process.argv.includes('-D') || process.argv.includes('--debug')
+      debug: this.debug
     })
+    //process.argv.includes('-D') || process.argv.includes('--debug')
 
     myEmitter.on(VCONTROL_EVENT_NAME, () => {
       this.log.debug('VCONTROL EVENT!');
@@ -81,6 +88,7 @@ class ViessmanControl implements DynamicPlatformPlugin {
      * This event can also be used to start discovery of new accessories.
      */
     api.on(APIEvent.DID_FINISH_LAUNCHING, this.didFinishLaunching.bind(this));
+    api.on(APIEvent.SHUTDOWN, this.shutdown.bind(this));
   }
 
   async processvControl() {
@@ -96,7 +104,7 @@ class ViessmanControl implements DynamicPlatformPlugin {
       try {
         await this.vControlC.connect();
       } catch(err) {
-        this.log.error(err);
+        this.log.error(err.message);
         vcontrolQueueItem.cb(null);
         this.log.debug("vcontrol running false");
         this.vControld_Running = false;
@@ -106,21 +114,22 @@ class ViessmanControl implements DynamicPlatformPlugin {
 
     while(vcontrolQueueItem) {
 
-      this.log.debug("Executing cmd: "+ vcontrolQueueItem.cmd);
+      this.log.info("Executing cmd: "+ vcontrolQueueItem.cmd);
       try {
         if(vcontrolQueueItem.action == vcontrolAction.GET) {
 
           let data = await this.vControlC.getData(vcontrolQueueItem.cmd);
-          this.log.debug("received data for cmd: "+vcontrolQueueItem.cmd+": "+data);
+          this.log.info("Received data for cmd: "+vcontrolQueueItem.cmd+": "+data);
   
           vcontrolQueueItem.cb(data);
         }
         else {
           await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value);
+          this.log.info("Setting data for cmd: "+vcontrolQueueItem.cmd+" done.");
           vcontrolQueueItem.cb();
         }
       } catch(err) {
-        this.log.error(err);
+        this.log.error(err.message);
         vcontrolQueueItem.cb(null);
       }
       vcontrolQueueItem = vcontrolQueue.shift();
@@ -128,7 +137,7 @@ class ViessmanControl implements DynamicPlatformPlugin {
     try {
       await this.vControlC.close();
     } catch(err) {
-      this.log.error(err);
+      this.log.error(err.message);
     }
     this.log.debug("vcontrol running false");
 
@@ -139,66 +148,81 @@ class ViessmanControl implements DynamicPlatformPlugin {
    * It should be used to setup event handlers for characteristics and update respective values.
    */
   configureAccessory(accessory: PlatformAccessory): void {
-    this.log("Configuring accessory %s", accessory.displayName);
+      this.log("Configuring accessory %s", accessory.displayName);
 
-    accessory.on(PlatformAccessoryEvent.IDENTIFY, () => {
-      this.log("%s identified!", accessory.displayName);
-    });
+      accessory.on(PlatformAccessoryEvent.IDENTIFY, () => {
+          this.log("%s identified!", accessory.displayName);
+      });
 
-    const accInfo = accessory.getService(hap.Service.AccessoryInformation);
-    if (accInfo) {
-      accInfo.setCharacteristic(hap.Characteristic.Manufacturer, this.config.manufacturer || 'Viessmann');
-      accInfo.setCharacteristic(hap.Characteristic.Model, this.config.model || 'unknown');
-      accInfo.setCharacteristic(hap.Characteristic.SoftwareRevision, version);
-    }
-     this.heatingCircleNames.forEach((entry:Heizkreis) => {
+      const accInfo = accessory.getService(hap.Service.AccessoryInformation);
+      if (accInfo) {
+          accInfo.setCharacteristic(hap.Characteristic.Manufacturer, this.config.manufacturer || 'Viessmann');
+          accInfo.setCharacteristic(hap.Characteristic.Model, this.config.model || 'unknown');
+          accInfo.setCharacteristic(hap.Characteristic.SoftwareRevision, version);
+      }
+      this.heatingCircleNames.forEach((entry:Heizkreis) => {
 
-      let handler = new ViessmannHandler(entry, this.log);
-      this.log.info("Configure service for: ", entry);
-      
-      let service_old = accessory.getServiceById(hap.Service.Thermostat, entry);
-      if(service_old) accessory.removeService(service_old);
-      if(service_old) this.log.debug("found service ==> remove:", service_old?.UUID);
+        let handler = new ViessmannHandler(entry, this.log, this.api);
+        this.handlerList.push(handler);
+        this.log.info("Configure service for: ", entry);
+        
+        let service_old = accessory.getServiceById(hap.Service.Thermostat, entry);
+        if(service_old) accessory.removeService(service_old);
+        if(service_old) this.log.debug("found service ==> remove:", service_old?.UUID);
 
-      let service = new hap.Service.Thermostat(entry, entry);   
-      this.log.debug("add new thermostst service with UUID", service.UUID);
- 
+        let service = new hap.Service.Thermostat(entry, entry);   
+        this.log.debug("add new thermostst service with UUID", service.UUID);
+  
         service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState)
-        .onGet(handler.handleCurrentHeatingCoolingStateGet.bind(handler));
+        //.onGet(handler.handleCurrentHeatingCoolingStateGet.bind(handler));
+        .onGet(handler.currentHeatingCoolingStateFromCache.bind(handler));
 
         service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState)
-        .onGet(handler.handleTargetHeatingCoolingStateGet.bind(handler))
-        /*.onSet(async (value: CharacteristicValue) => {
-          handler.handleTargetHeatingCoolingStateSet(value);
-          })
-          */
+        //.onGet(handler.handleTargetHeatingCoolingStateGet.bind(handler))
+        .onGet(handler.targetHeatingCoolingStateFromCache.bind(handler))
         .onSet(handler.handleTargetHeatingCoolingStateSet.bind(handler))
         .props.validValues = [0, 1]; //only OFF and HEAT are supported
 
         service.getCharacteristic(hap.Characteristic.CurrentTemperature)
-        .onGet(handler.handleCurrentTemperatureGet.bind(handler));
+        //.onGet(handler.handleCurrentTemperatureGet.bind(handler));
+        .onGet(handler.currentTemperatureFromCache.bind(handler));
 
         service.getCharacteristic(hap.Characteristic.TargetTemperature)
-        .onGet(handler.handleTargetTemperatureGet.bind(handler))
+        //.onGet(handler.handleTargetTemperatureGet.bind(handler))
+        .onGet(handler.targetTemperatureFromCache.bind(handler))
         .onSet(handler.handleTargetTemperatureSet.bind(handler))
-        /*
-        .onSet(async (value: CharacteristicValue) => {
-          handler.handleTargetTemperatureSet(value);
-          }) */
-
-         let props:CharacteristicProps = service.getCharacteristic(hap.Characteristic.TargetTemperature).props;
-          props.minValue = 15;
-          props.maxValue = 25;
-          props.minStep = 1;
+        let props:CharacteristicProps = service.getCharacteristic(hap.Characteristic.TargetTemperature).props;
+        props.minValue = 15;
+        props.maxValue = 25;
+        props.minStep = 1;
           
         service.getCharacteristic(hap.Characteristic.TemperatureDisplayUnits)
-        .onGet(handler.handleTemperatureDisplayUnitsGet.bind(handler))
+        //.onGet(handler.handleTemperatureDisplayUnitsGet.bind(handler))
+        .onGet(handler.temperatureDisplayUnitFromCache.bind(handler))
         .onSet(handler.handleTemperatureDisplayUnitsSet.bind(handler))
         .props.validValues = [0];
 
         accessory.addService(service);
     });
     this.accessories.push(accessory);
+
+    this.timer = setInterval(() => {
+        this.cycleUpdate();
+    }, 1000*60*updateIntervalMinutes);
+
+    this.cycleUpdate();
+  }
+
+  shutdown(): void {
+      this.log.info("Shutdown");
+      if(this.timer) clearTimeout(this.timer);
+  }
+
+  cycleUpdate(): void {
+    this.log.info("Start cyclic update")
+      this.handlerList.forEach((handler:ViessmannHandler) => {
+          handler.update();
+    });
   }
 
   didFinishLaunching(): void {
@@ -207,26 +231,65 @@ class ViessmanControl implements DynamicPlatformPlugin {
     const uuid = hap.uuid.generate(this.config.model);
   
     if (!this.accessories.find((x: PlatformAccessory) => x.UUID === uuid)) {
-      this.log.info("Create new accessory, not cached previously", uuid);
-      const accessory = new Accessory(this.config.model, uuid);
-      this.configureAccessory(accessory);
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+        this.log.info("Create new accessory, not cached previously", uuid);
+        const accessory = new Accessory(this.config.model, uuid);
+        this.configureAccessory(accessory);
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
     }
   };
 }
 
-class ViessmannHandler{
+class ViessmannHandler {
   hk:Heizkreis;
   log: Logging;
   targetState = 1;
+  api: API;
+  cache: cache = {currentTemp: 21, targetTemp:21, currentHeatingCoolingState: 0, targetHeatingCoolingState: 0, unit:0};
 
-  constructor(hk:Heizkreis, log:Logging) {
+  constructor(hk:Heizkreis, log:Logging, api:API) {
     this.hk = hk;
     this.log = log;
+    this.api = api;
+    this.cache 
   }
 
-  handleCurrentHeatingCoolingStateGet() : Promise<CharacteristicValue> {
+  update(): void {
+    this.handleCurrentHeatingCoolingStateGet().then(val => {
+      this.cache.currentHeatingCoolingState = val as number;
+    });
+    this.handleTargetHeatingCoolingStateGet().then(val => {
+      this.cache.targetHeatingCoolingState = val as number;
+    });
+    this.handleCurrentTemperatureGet().then(val => {
+      this.cache.currentTemp = val as number;
+    });
+    this.handleTargetTemperatureGet().then(val => {
+      this.cache.targetTemp = val as number;
+    });
+    this.handleTemperatureDisplayUnitsGet().then(val => {
+      this.cache.unit = val as number;
+    });
+  }
+
+  currentHeatingCoolingStateFromCache(): CharacteristicValue {
+    return this.cache.currentHeatingCoolingState;
+  }
+  targetHeatingCoolingStateFromCache(): CharacteristicValue {
+    return this.cache.targetHeatingCoolingState;
+  }
+  currentTemperatureFromCache(): CharacteristicValue {
+    return this.cache.currentTemp;
+  }
+  targetTemperatureFromCache(): CharacteristicValue {
+    return this.cache.targetTemp;
+  }
+  temperatureDisplayUnitFromCache(): CharacteristicValue {
+    return this.cache.unit;
+  }
+
+  handleCurrentHeatingCoolingStateGet() : Promise<CharacteristicValue>   {
     this.log.debug('Triggered GET CurrentHeatingCoolingState');
+    let api = this.api;
 
     this.log.debug("name HK: "+this.hk);
     let cmd = this.hk == Heizkreis.HK1 ? "getVitoBetriebsartM1" :"getVitoBetriebsartM2";
@@ -235,6 +298,7 @@ class ViessmannHandler{
       function(resolve, reject) {
 
         let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
+          if(val == undefined || val == null) throw new api.hap.HapStatusError(api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
           let currentValue = (val >= 2) ? 1:0;
           resolve(currentValue);
           }
@@ -256,25 +320,6 @@ class ViessmannHandler{
         resolve(targetState);
       });
     return p1;
-  }
-
-  async handleTargetHeatingCoolingStateSet(value: CharacteristicValue) {
-    this.log.debug('Triggered SET TargetHeatingCoolingState:', value);
-    let cmd = this.hk == Heizkreis.HK1 ? "setVitoBetriebsartM1" :"setVitoBetriebsartM2";
-    this.targetState = value as number;
-    let mappedValue = 2;
-
-    if(value == 1) mappedValue = 2;
-    else if (value == 0) {
-      if(this.hk == Heizkreis.HK1) mappedValue = 1;
-      else if(this.hk == Heizkreis.HK2) mappedValue = 0;
-    }
-    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: mappedValue, cmd: cmd, cb: () => {
-      this.log.info("Set TargetHeatingCoolingState done.");
-      }
-    };
-    vcontrolQueue.push(item);
-    myEmitter.emit(VCONTROL_EVENT_NAME);
   }
 
   handleCurrentTemperatureGet() : Promise<CharacteristicValue> {
@@ -307,19 +352,7 @@ class ViessmannHandler{
       return p1;
   }
 
-  handleTargetTemperatureSet(value: CharacteristicValue) {
-    this.log.debug('Triggered SET TargetTemperature: %d', value as number);
-    let cmd = this.hk == Heizkreis.HK1 ? "setTempRaumNorSollM1" :"setTempRaumNorSollM2";
-
-    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: value as number, cmd: cmd, cb: () => {
-        this.log.info("Set TargetTemperature done.");
-      }
-    };
-    vcontrolQueue.push(item);
-    myEmitter.emit(VCONTROL_EVENT_NAME);
-  }
-
-  handleTemperatureDisplayUnitsGet(): Promise<number> {
+  handleTemperatureDisplayUnitsGet(): Promise<CharacteristicValue> {
     this.log.debug('Triggered GET TemperatureDisplayUnits');
     const currentValue = 0;
 
@@ -328,6 +361,41 @@ class ViessmannHandler{
         resolve(0);
       });
     return p1;
+  }
+
+  handleTargetHeatingCoolingStateSet(value: CharacteristicValue) {
+    this.log.debug('Triggered SET TargetHeatingCoolingState:', value);
+    let cmd = this.hk == Heizkreis.HK1 ? "setVitoBetriebsartM1" :"setVitoBetriebsartM2";
+    this.targetState = value as number;
+    let mappedValue = 2;
+    
+
+    if(value == 1) mappedValue = 2;
+    else if (value == 0) {
+      if(this.hk == Heizkreis.HK1) mappedValue = 1;
+      else if(this.hk == Heizkreis.HK2) mappedValue = 0;
+    }
+    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: mappedValue, cmd: cmd, cb: () => {
+      this.log.info("Set TargetHeatingCoolingState done.");
+      this.cache.targetHeatingCoolingState = value as number;
+      }
+    };
+    vcontrolQueue.push(item);
+    myEmitter.emit(VCONTROL_EVENT_NAME);
+  }
+
+  handleTargetTemperatureSet(value: CharacteristicValue) {
+    this.log.debug('Triggered SET TargetTemperature: %d', value as number);
+    let cmd = this.hk == Heizkreis.HK1 ? "setTempRaumNorSollM1" :"setTempRaumNorSollM2";
+    
+
+    let item: vcontrolQueueItem = {action:vcontrolAction.SET, value: value as number, cmd: cmd, cb: () => {
+        this.log.info("Set TargetTemperature done.");
+        this.cache.targetTemp = value as number;
+      }
+    };
+    vcontrolQueue.push(item);
+    myEmitter.emit(VCONTROL_EVENT_NAME);
   }
 
   handleTemperatureDisplayUnitsSet(value: CharacteristicValue) {

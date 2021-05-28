@@ -6,6 +6,7 @@ export type ViessmannConfig = {
     model: string;
     vcontroldIP: string;
     vcontroldPort: number;
+    debug: boolean;
 
   };
 
@@ -29,4 +30,12 @@ export type ViessmannConfig = {
   export type heatingCircle = {
     name: string;
     log:Logging;
+  }
+
+  export type cache = {
+    currentTemp: number;
+    targetTemp: number;
+    currentHeatingCoolingState: number;
+    targetHeatingCoolingState: number;
+    unit: number;
   }
