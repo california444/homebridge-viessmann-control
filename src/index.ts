@@ -119,13 +119,21 @@ class ViessmanControl implements DynamicPlatformPlugin {
       try {
         if(vcontrolQueueItem.action == vcontrolAction.GET) {
 
-          let data = await this.vControlC.getData(vcontrolQueueItem.cmd);
+          let data = await this.vControlC.getData(vcontrolQueueItem.cmd).catch((e:Error) => {
+            let err = e as Error;
+            this.log.error(err.message);
+            vcontrolQueueItem!.cb(null);
+          });
           this.log.info("Received data for cmd: "+vcontrolQueueItem.cmd+": "+data);
   
           vcontrolQueueItem.cb(data);
         }
         else {
-          await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value);
+          await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value).catch((e:Error) => {
+            let err = e as Error;
+            this.log.error(err.message);
+            vcontrolQueueItem!.cb(null);
+          });
           this.log.info("Setting data for cmd: "+vcontrolQueueItem.cmd+" done.");
           vcontrolQueueItem.cb();
         }
