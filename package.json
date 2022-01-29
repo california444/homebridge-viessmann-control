@@ -1,6 +1,6 @@
 {
   "name": "homebridge-viessmann-control",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Homebrige plugin to control the temperature and state of Viessmann heatings systems with vcontrold",
   "main": "dist/index.js",
   "scripts": {
