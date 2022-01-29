@@ -103,7 +103,8 @@ class ViessmanControl implements DynamicPlatformPlugin {
     if(vcontrolQueueItem) {
       try {
         await this.vControlC.connect();
-      } catch(err) {
+      } catch(e) {
+        let err = e as Error;
         this.log.error(err.message);
         vcontrolQueueItem.cb(null);
         this.log.debug("vcontrol running false");
@@ -128,7 +129,8 @@ class ViessmanControl implements DynamicPlatformPlugin {
           this.log.info("Setting data for cmd: "+vcontrolQueueItem.cmd+" done.");
           vcontrolQueueItem.cb();
         }
-      } catch(err) {
+      } catch(e) {
+        let err = e as Error;
         this.log.error(err.message);
         vcontrolQueueItem.cb(null);
       }
@@ -136,7 +138,8 @@ class ViessmanControl implements DynamicPlatformPlugin {
     }
     try {
       await this.vControlC.close();
-    } catch(err) {
+    } catch(e) {
+      let err = e as Error;
       this.log.error(err.message);
     }
     this.log.debug("vcontrol running false");
@@ -298,7 +301,7 @@ class ViessmannHandler {
       function(resolve, reject) {
 
         let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
-          if(val == undefined || val == null) throw new api.hap.HapStatusError(api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+          if(val == undefined || val == null) reject("Could not process request");
           let currentValue = (val >= 2) ? 1:0;
           resolve(currentValue);
           }
