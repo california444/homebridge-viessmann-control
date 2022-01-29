@@ -40,6 +40,6 @@
     "homebridge": "^1.3.0"
   },
   "dependencies": {
-    "vcontrol": "^0.0.7"
+    "vcontrol": "^0.0.8"
   }
 }
