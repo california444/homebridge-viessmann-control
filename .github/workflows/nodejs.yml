@@ -4,6 +4,7 @@ on:
   release: # Run when release is created
     types: [created]
   push:
+    branches: [master]
   pull_request:
 
 jobs:
