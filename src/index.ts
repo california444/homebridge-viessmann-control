@@ -115,33 +115,39 @@ class ViessmanControl implements DynamicPlatformPlugin {
 
     while(vcontrolQueueItem) {
 
-      this.log.info("Executing cmd: "+ vcontrolQueueItem.cmd);
-      try {
+      this.log.debug("Executing cmd: "+ vcontrolQueueItem.cmd);
+      //try {
         if(vcontrolQueueItem.action == vcontrolAction.GET) {
 
-          let data = await this.vControlC.getData(vcontrolQueueItem.cmd).catch((e:Error) => {
+          let data = await this.vControlC.getData(vcontrolQueueItem.cmd)
+          .then(() => {
+            this.log.debug("Received data for cmd: "+vcontrolQueueItem!.cmd+": "+data);
+            vcontrolQueueItem!.cb(data);
+          })
+          .catch((e:Error) => {
             let err = e as Error;
             this.log.error(err.message);
             vcontrolQueueItem!.cb(null);
           });
-          this.log.info("Received data for cmd: "+vcontrolQueueItem.cmd+": "+data);
-  
-          vcontrolQueueItem.cb(data);
         }
         else {
-          await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value).catch((e:Error) => {
+          await this.vControlC.setData(vcontrolQueueItem.cmd, vcontrolQueueItem.value)
+          .then(() => {
+            this.log.debug("Setting data for cmd: "+vcontrolQueueItem!.cmd+" done.");
+            vcontrolQueueItem!.cb();
+          })
+          .catch((e:Error) => {
             let err = e as Error;
             this.log.error(err.message);
-            vcontrolQueueItem!.cb(null);
+            vcontrolQueueItem!.cb();
           });
-          this.log.info("Setting data for cmd: "+vcontrolQueueItem.cmd+" done.");
-          vcontrolQueueItem.cb();
         }
-      } catch(e) {
+     /* } catch(e) {
         let err = e as Error;
         this.log.error(err.message);
         vcontrolQueueItem.cb(null);
       }
+      */
       vcontrolQueueItem = vcontrolQueue.shift();
     }
     try {
@@ -352,6 +358,7 @@ class ViessmannHandler {
       function(resolve, reject) {
         let cmd = hk == Heizkreis.HK1 ? "getTempRaumNorSollM1" :"getTempRaumNorSollM2";
         let item: vcontrolQueueItem = {action:vcontrolAction.GET, cmd: cmd, cb: (val: any) => {
+          if(val == undefined || val == null) reject("Could not process request");
           log.debug(hk+ ": received TargetTemperature: "+val);
           let currentValue = val as number;
           resolve(currentValue);
