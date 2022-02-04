@@ -119,8 +119,8 @@ class ViessmanControl implements DynamicPlatformPlugin {
       //try {
         if(vcontrolQueueItem.action == vcontrolAction.GET) {
 
-          let data = await this.vControlC.getData(vcontrolQueueItem.cmd)
-          .then(() => {
+          await this.vControlC.getData(vcontrolQueueItem.cmd)
+          .then((data:any) => {
             this.log.debug("Received data for cmd: "+vcontrolQueueItem!.cmd+": "+data);
             vcontrolQueueItem!.cb(data);
           })
