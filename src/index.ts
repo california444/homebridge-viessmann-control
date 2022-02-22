@@ -273,18 +273,33 @@ class ViessmannHandler {
   update(): void {
     this.handleCurrentHeatingCoolingStateGet().then(val => {
       this.cache.currentHeatingCoolingState = val as number;
+    })
+    .catch((e:Error) => {
+      this.log.error(e.message);
     });
     this.handleTargetHeatingCoolingStateGet().then(val => {
       this.cache.targetHeatingCoolingState = val as number;
+    })
+    .catch((e:Error) => {
+      this.log.error(e.message);
     });
     this.handleCurrentTemperatureGet().then(val => {
       this.cache.currentTemp = val as number;
+    })
+    .catch((e:Error) => {
+      this.log.error(e.message);
     });
     this.handleTargetTemperatureGet().then(val => {
       this.cache.targetTemp = val as number;
+    })
+    .catch((e:Error) => {
+      this.log.error(e.message);
     });
     this.handleTemperatureDisplayUnitsGet().then(val => {
       this.cache.unit = val as number;
+    })
+    .catch((e:Error) => {
+      this.log.error(e.message);
     });
   }
 
